@@ -39,14 +39,63 @@ jobs:
             [ -n "$2" ] || { echo "Could not resolve $1" >&2; exit 1; }
           }
 
-          IGC_VERSION=$(latest_tag intel/intel-graphics-compiler)
-          IGC_CORE_DEB=$(asset_name intel/intel-graphics-compiler "$IGC_VERSION" '^intel-igc-core-2?_.*_amd64\.deb$')
-          IGC_OPENCL_DEB=$(asset_name intel/intel-graphics-compiler "$IGC_VERSION" '^intel-igc-opencl-2?_.*_amd64\.deb$')
-
           COMPUTE_RT_VERSION=$(latest_tag intel/compute-runtime)
           LEVEL_ZERO_GPU_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^(intel-level-zero-gpu|libze-intel-gpu1)_.*_amd64\.deb$')
           OPENCL_ICD_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^intel-opencl-icd_.*_amd64\.deb$')
           GMMLIB_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^libigdgmm12_.*_amd64\.deb$')
+
+          # Select the newest IGC release compatible with the selected runtime packages.
+          RUNTIME_DEBS="$RUNNER_TEMP/runtime-debs"
+          mkdir -p "$RUNTIME_DEBS"
+          gh release download "$COMPUTE_RT_VERSION" --repo intel/compute-runtime \
+            --pattern "$LEVEL_ZERO_GPU_DEB" --pattern "$OPENCL_ICD_DEB" --dir "$RUNTIME_DEBS"
+          IGC_VERSION=
+          IGC_CORE_DEB=
+          IGC_OPENCL_DEB=
+          IGC_RELEASES=$(gh api "repos/intel/intel-graphics-compiler/releases?per_page=30" --jq '
+            .[] | [.tag_name,
+              ([.assets[].name | select(test("^intel-igc-core-2?_.*_amd64\\.deb$"))] | first // ""),
+              ([.assets[].name | select(test("^intel-igc-opencl-2?_.*_amd64\\.deb$"))] | first // "")] | @tsv')
+          while IFS=$'\t' read -r tag core_deb opencl_deb; do
+            [ -n "$core_deb" ] && [ -n "$opencl_deb" ] || continue
+            core_version=${core_deb#*_}
+            core_version=${core_version%_amd64.deb}
+            opencl_version=${opencl_deb#*_}
+            opencl_version=${opencl_version%_amd64.deb}
+            if python3 - \
+              "$RUNTIME_DEBS/$LEVEL_ZERO_GPU_DEB" "$RUNTIME_DEBS/$OPENCL_ICD_DEB" \
+              "$core_version" "$opencl_version" <<'PY'
+          import re
+          import subprocess
+          import sys
+
+          operators = {"<<": "lt", "<=": "le", "=": "eq", ">=": "ge", ">>": "gt"}
+          versions = {
+              "intel-igc-core-2": sys.argv[3],
+              "intel-igc-opencl-2": sys.argv[4],
+          }
+          for deb in sys.argv[1:3]:
+              depends = subprocess.check_output(
+                  ["dpkg-deb", "-f", deb, "Depends"], text=True
+              )
+              for package, operator, required in re.findall(
+                  r"\b(intel-igc-(?:core|opencl)-2)\s*\((<<|<=|=|>=|>>)\s*([^)]+)\)",
+                  depends,
+              ):
+                  if subprocess.run(
+                      ["dpkg", "--compare-versions", versions[package], operators[operator], required.strip()],
+                      check=False,
+                  ).returncode:
+                      sys.exit(1)
+          PY
+            then
+              IGC_VERSION=$tag
+              IGC_CORE_DEB=$core_deb
+              IGC_OPENCL_DEB=$opencl_deb
+              echo "Using compatible IGC release $IGC_VERSION"
+              break
+            fi
+          done <<< "$IGC_RELEASES"
 
           LEVEL_ZERO_LOADER_VERSION=$(latest_tag oneapi-src/level-zero)
           LEVEL_ZERO_LOADER_DEB=$(asset_name oneapi-src/level-zero "$LEVEL_ZERO_LOADER_VERSION" '^(level-zero|libze1)_.*u24\.04_amd64\.deb$')
