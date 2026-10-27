@@ -58,10 +58,8 @@ jobs:
               ([.assets[].name | select(test("^intel-igc-opencl-2?_.*_amd64\\.deb$"))] | first // "")] | @tsv')
           while IFS=$'\t' read -r tag core_deb opencl_deb; do
             [ -n "$core_deb" ] && [ -n "$opencl_deb" ] || continue
-            core_version=${core_deb#*_}
-            core_version=${core_version%_amd64.deb}
-            opencl_version=${opencl_deb#*_}
-            opencl_version=${opencl_version%_amd64.deb}
+            core_version=${tag#v}
+            opencl_version=${core_version}
             if python3 - \
               "$RUNTIME_DEBS/$LEVEL_ZERO_GPU_DEB" "$RUNTIME_DEBS/$OPENCL_ICD_DEB" \
               "$core_version" "$opencl_version" <<'PY'
