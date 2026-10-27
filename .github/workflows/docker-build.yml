@@ -1,0 +1,112 @@
+name: Build Docker image
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Resolve the latest upstream releases and override the Dockerfile ARG defaults
+      - name: Resolve latest versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          latest_tag() {
+            gh api "repos/$1/releases/latest" --jq .tag_name
+          }
+          # asset_name <repo> <tag> <regex>
+          asset_name() {
+            gh api "repos/$1/releases/tags/$2" --paginate --jq '.assets[].name' \
+              | grep -E "$3" | head -n1
+          }
+          require() {
+            [ -n "$2" ] || { echo "Could not resolve $1" >&2; exit 1; }
+          }
+
+          IGC_VERSION=$(latest_tag intel/intel-graphics-compiler)
+          IGC_CORE_DEB=$(asset_name intel/intel-graphics-compiler "$IGC_VERSION" '^intel-igc-core-2?_.*_amd64\.deb$')
+          IGC_OPENCL_DEB=$(asset_name intel/intel-graphics-compiler "$IGC_VERSION" '^intel-igc-opencl-2?_.*_amd64\.deb$')
+
+          COMPUTE_RT_VERSION=$(latest_tag intel/compute-runtime)
+          LEVEL_ZERO_GPU_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^intel-level-zero-gpu_.*_amd64\.deb$')
+          OPENCL_ICD_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^intel-opencl-icd_.*_amd64\.deb$')
+          GMMLIB_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^libigdgmm12_.*_amd64\.deb$')
+
+          LEVEL_ZERO_LOADER_VERSION=$(latest_tag oneapi-src/level-zero)
+          LEVEL_ZERO_LOADER_DEB=$(asset_name oneapi-src/level-zero "$LEVEL_ZERO_LOADER_VERSION" '^level-zero_.*u24\.04_amd64\.deb$')
+
+          # Newest IPEX-LLM release carrying an Ubuntu Ollama portable package
+          IPEXLLM_RELEASE_REPO=ipex-llm/ipex-llm
+          IPEXLLM_RELEASE_VERSION=
+          IPEXLLM_PORTABLE_ZIP=
+          while read -r tag; do
+            name=$(asset_name "$IPEXLLM_RELEASE_REPO" "$tag" '^ollama-ipex-llm-.*-ubuntu\.tgz$' || true)
+            if [ -n "$name" ]; then
+              IPEXLLM_RELEASE_VERSION=$tag
+              IPEXLLM_PORTABLE_ZIP=$name
+              break
+            fi
+          done < <(gh api "repos/$IPEXLLM_RELEASE_REPO/releases?per_page=30" --jq '.[].tag_name')
+
+          for v in IGC_VERSION IGC_CORE_DEB IGC_OPENCL_DEB COMPUTE_RT_VERSION \
+                   LEVEL_ZERO_GPU_DEB OPENCL_ICD_DEB GMMLIB_DEB \
+                   LEVEL_ZERO_LOADER_VERSION LEVEL_ZERO_LOADER_DEB \
+                   IPEXLLM_RELEASE_VERSION IPEXLLM_PORTABLE_ZIP; do
+            require "$v" "${!v}"
+          done
+
+          {
+            echo "BUILD_ARGS<<EOF"
+            for v in IGC_VERSION IGC_CORE_DEB IGC_OPENCL_DEB COMPUTE_RT_VERSION \
+                     LEVEL_ZERO_GPU_DEB OPENCL_ICD_DEB GMMLIB_DEB \
+                     LEVEL_ZERO_LOADER_VERSION LEVEL_ZERO_LOADER_DEB \
+                     IPEXLLM_RELEASE_REPO IPEXLLM_RELEASE_VERSION IPEXLLM_PORTABLE_ZIP; do
+              echo "$v=${!v}"
+            done
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha
+            type=ref,event=pr
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ env.BUILD_ARGS }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
