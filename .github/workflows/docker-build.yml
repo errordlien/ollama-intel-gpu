@@ -44,12 +44,12 @@ jobs:
           IGC_OPENCL_DEB=$(asset_name intel/intel-graphics-compiler "$IGC_VERSION" '^intel-igc-opencl-2?_.*_amd64\.deb$')
 
           COMPUTE_RT_VERSION=$(latest_tag intel/compute-runtime)
-          LEVEL_ZERO_GPU_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^intel-level-zero-gpu_.*_amd64\.deb$')
+          LEVEL_ZERO_GPU_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^(intel-level-zero-gpu|libze-intel-gpu1)_.*_amd64\.deb$')
           OPENCL_ICD_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^intel-opencl-icd_.*_amd64\.deb$')
           GMMLIB_DEB=$(asset_name intel/compute-runtime "$COMPUTE_RT_VERSION" '^libigdgmm12_.*_amd64\.deb$')
 
           LEVEL_ZERO_LOADER_VERSION=$(latest_tag oneapi-src/level-zero)
-          LEVEL_ZERO_LOADER_DEB=$(asset_name oneapi-src/level-zero "$LEVEL_ZERO_LOADER_VERSION" '^level-zero_.*u24\.04_amd64\.deb$')
+          LEVEL_ZERO_LOADER_DEB=$(asset_name oneapi-src/level-zero "$LEVEL_ZERO_LOADER_VERSION" '^(level-zero|libze1)_.*u24\.04_amd64\.deb$')
 
           # Newest IPEX-LLM release carrying an Ubuntu Ollama portable package
           IPEXLLM_RELEASE_REPO=ipex-llm/ipex-llm
